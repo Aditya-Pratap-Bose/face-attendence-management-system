@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Manage Students - Face Attendance</title>
+  <style>
+    :root{--bg:#0b0f12;--panel:#081018;--neon:#00f6ff;--accent:#9b59b6;--muted:#9aa4ab;--glass: rgba(255,255,255,0.03);--danger:#ff4d5e;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial}
+    html,body{height:100%;margin:0;background:radial-gradient(circle at 10% 10%, #071018 0%, var(--bg) 40%);color:#e6eef3}
+    .container{max-width:980px;margin:36px auto;padding:28px;border-radius:12px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));box-shadow:0 6px 30px rgba(0,0,0,0.6),0 0 40px var(--neon) inset;border:1px solid rgba(255,255,255,0.04)}
+    .header{display:flex;flex-direction:column;align-items:center;gap:16px}
+    .logo{height:120px;border-radius:8px;background:linear-gradient(135deg,#071824,#0b1730);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--neon);box-shadow:0 0 24px rgba(0,246,255,0.12)}
+    .nav{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+    .nav a{padding:10px 16px;border-radius:8px;background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--neon);text-decoration:none}
+    .panel{background:var(--panel);padding:18px;border-radius:10px;box-shadow:0 6px 40px rgba(0,0,0,0.6),0 0 24px rgba(155,89,182,0.04) inset;border:1px solid rgba(255,255,255,0.03);margin-top:18px}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    input[type=text]{padding:10px;border-radius:8px;background:var(--glass);border:1px solid rgba(255,255,255,0.03);color:#eaf6ff;flex:1;min-width:180px}
+    button{padding:10px 14px;border-radius:8px;background:linear-gradient(90deg,var(--neon),var(--accent));color:#011;border:none;cursor:pointer;font-weight:600}
+    button.danger{background:linear-gradient(90deg,#ff8a8a,var(--danger));color:#1a0000}
+    button:disabled{opacity:0.5;cursor:not-allowed}
+    .table-wrap{max-height:480px;overflow:auto;margin-top:12px;border-radius:8px;background:rgba(255,255,255,0.02);padding:8px}
+    table{width:100%;border-collapse:collapse;color:#eaf6ff}
+    th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.03);text-align:left}
+    th{position:sticky;top:0;background:rgba(0,0,0,0.35)}
+    tr.removing{opacity:0.35}
+    .count{color:var(--muted);font-size:14px}
+    footer{margin-top:18px;text-align:center;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo"><img src="/static/logo.jpg" alt="College Logo" style="height:120px;width:auto;object-fit:contain;border-radius:6px;"/></div>
+      <div class="nav">
+        <a href="/enroll">Enroll Student</a>
+        <a href="/attendance">Take Attendance</a>
+        <a href="/download">Download Attendance</a>
+        <a href="/students">Manage Students</a>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Manage Students</h2>
+      <p style="color:var(--muted)">All enrolled students, ordered by roll number. Deleting a student removes their face data — this cannot be undone.</p>
+
+      <div class="controls">
+        <input type="text" id="filter" placeholder="Filter by roll number or name..." />
+        <span class="count" id="count"></span>
+      </div>
+
+      <div class="table-wrap" id="tableWrap">
+        <table id="studentTable">
+          <thead><tr><th>Roll No</th><th>Name</th><th>Class</th><th>Enrolled On</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="msg" style="color:var(--muted);margin-top:8px"></p>
+    </div>
+
+    <footer>Face Recognition Attendance System · Simple dark neon UI</footer>
+  </div>
+
+  <script>
+    const tbody = document.querySelector('#studentTable tbody');
+    const filterInput = document.getElementById('filter');
+    const countEl = document.getElementById('count');
+    const msg = document.getElementById('msg');
+
+    let allStudents = [];
+
+    function formatDate(iso) {
+      try { return new Date(iso).toLocaleString(); } catch (e) { return iso || ''; }
+    }
+
+    function makeCell(text) {
+      const td = document.createElement('td');
+      td.textContent = text ?? '';
+      return td;
+    }
+
+    function renderRows(students) {
+      tbody.innerHTML = '';
+      students.forEach(s => {
+        const tr = document.createElement('tr');
+        tr.dataset.rollno = s.rollno;
+        tr.appendChild(makeCell(s.rollno));
+        tr.appendChild(makeCell(s.name));
+        tr.appendChild(makeCell(s.class_name || ''));
+        tr.appendChild(makeCell(formatDate(s.created_at)));
+
+        const actionTd = document.createElement('td');
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.className = 'danger';
+        delBtn.addEventListener('click', () => onDelete(s.rollno, s.name, tr));
+        actionTd.appendChild(delBtn);
+        tr.appendChild(actionTd);
+
+        tbody.appendChild(tr);
+      });
+      countEl.textContent = students.length + (students.length === 1 ? ' student' : ' students');
+    }
+
+    async function loadStudents() {
+      msg.textContent = 'Loading...';
+      try {
+        const res = await fetch('/students/api/list');
+        const data = await res.json();
+        if (data.error) { msg.textContent = data.error; return; }
+        allStudents = data.students || [];
+        renderRows(allStudents);
+        msg.textContent = allStudents.length === 0 ? 'No students enrolled yet.' : '';
+      } catch (e) {
+        console.error(e);
+        msg.textContent = 'Failed to load students.';
+      }
+    }
+
+    function applyFilter() {
+      const q = filterInput.value.trim().toLowerCase();
+      if (!q) { renderRows(allStudents); return; }
+      const filtered = allStudents.filter(s =>
+        (s.rollno || '').toLowerCase().includes(q) ||
+        (s.name || '').toLowerCase().includes(q)
+      );
+      renderRows(filtered);
+    }
+
+    filterInput.addEventListener('input', applyFilter);
+
+    async function onDelete(rollno, name, rowEl) {
+      const confirmed = window.confirm(`Delete ${name} (${rollno})? This removes their enrolled face data and cannot be undone.`);
+      if (!confirmed) return;
+
+      rowEl.classList.add('removing');
+      const delBtn = rowEl.querySelector('button');
+      if (delBtn) delBtn.disabled = true;
+
+      try {
+        const res = await fetch(`/students/api/delete/${encodeURIComponent(rollno)}`, { method: 'DELETE' });
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          alert(data.error || 'Could not delete student.');
+          rowEl.classList.remove('removing');
+          if (delBtn) delBtn.disabled = false;
+          return;
+        }
+
+        allStudents = allStudents.filter(s => s.rollno !== rollno);
+        applyFilter();
+        msg.textContent = `${name} (${rollno}) was deleted.`;
+        setTimeout(() => { if (msg.textContent.includes(rollno)) msg.textContent = ''; }, 4000);
+      } catch (e) {
+        console.error(e);
+        alert('Network error — could not delete student.');
+        rowEl.classList.remove('removing');
+        if (delBtn) delBtn.disabled = false;
+      }
+    }
+
+    loadStudents();
+  </script>
+</body>
+</html>

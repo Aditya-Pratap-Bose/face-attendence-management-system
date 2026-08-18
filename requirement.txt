@@ -1,0 +1,7 @@
+opencv-python-headless
+numpy<2.0
+fastapi
+uvicorn
+jinja2
+python-multipart
+setuptools<81

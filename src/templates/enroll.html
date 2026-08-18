@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Enroll Student - Face Attendance</title>
+  <style>
+    :root{
+      --bg:#0b0f12;
+      --panel:#081018;
+      --neon:#00f6ff;
+      --accent:#9b59b6;
+      --muted:#9aa4ab;
+      --glass: rgba(255,255,255,0.03);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body{height:100%;margin:0;background:radial-gradient(circle at 10% 10%, #071018 0%, var(--bg) 40%);color:#e6eef3}
+    .container{max-width:980px;margin:36px auto;padding:28px;border-radius:12px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));box-shadow:0 6px 30px rgba(0,0,0,0.6),0 0 40px var(--neon) inset; border:1px solid rgba(255,255,255,0.04)}
+    .header{display:flex;flex-direction:column;align-items:center;gap:16px}
+    .logo{height:120px; /* keep rectangular image height, allow width to adapt */ border-radius:8px;background:linear-gradient(135deg,#071824,#0b1730);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--neon);box-shadow:0 0 24px rgba(0,246,255,0.12)}
+
+    .nav{display:flex;gap:12px}
+    .nav a{padding:10px 16px;border-radius:8px;background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--neon);text-decoration:none;box-shadow:0 6px 30px rgba(0,0,0,0.6);}
+
+    .grid{display:grid;grid-template-columns:1fr 420px;gap:18px;margin-top:18px}
+    .panel{background:var(--panel);padding:18px;border-radius:10px;box-shadow:0 6px 40px rgba(0,0,0,0.6),0 0 24px rgba(155,89,182,0.04) inset;border:1px solid rgba(255,255,255,0.03)}
+
+    form .row{display:flex;gap:10px;margin-bottom:12px}
+    input[type=text]{flex:1;padding:12px;border-radius:8px;background:var(--glass);border:1px solid rgba(255,255,255,0.03);color:#eaf6ff}
+    button{padding:10px 14px;border-radius:8px;background:linear-gradient(90deg,var(--neon),var(--accent));color:#011; border:none;cursor:pointer;font-weight:600}
+    button[disabled]{opacity:0.5;cursor:not-allowed}
+
+    .video-wrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+    video#video{width:100%;height:360px;border-radius:8px;background:#000;box-shadow:0 0 30px rgba(0,0,0,0.6),0 0 28px rgba(0,246,255,0.06) inset}
+    .status{font-size:14px;color:var(--muted)}
+
+    .progress{height:10px;background:rgba(255,255,255,0.03);border-radius:6px;overflow:hidden}
+    .progress > i{display:block;height:100%;background:linear-gradient(90deg,var(--neon),var(--accent));width:0%}
+
+    footer{margin-top:18px;text-align:center;color:var(--muted);font-size:13px}
+
+    @media(max-width:980px){.grid{grid-template-columns:1fr;}.logo{width:90px;height:90px}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo"><img src="/static/logo.jpg" alt="College Logo" style="height:120px;width:auto;object-fit:contain;border-radius:6px;"/></div>
+      <div class="nav">
+        <a href="/enroll">Enroll Student</a>
+        <a href="/attendance">Take Attendance</a>
+        <a href="/download">Download Attendance</a>
+        <a href="/students">Manage Students</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <h2>Enroll Student</h2>
+        <p class="status">Enter student's Name and Roll Number. Camera remains idle until you press Start.</p>
+
+        <form id="enrollForm" onsubmit="return false;">
+          <div class="row">
+            <input type="text" id="name" placeholder="Student Name" autocomplete="off" />
+            <input type="text" id="roll" placeholder="Roll Number" autocomplete="off" />
+          </div>
+          <div class="row">
+            <button id="startBtn" disabled>Start</button>
+            <button id="stopBtn" disabled>Stop</button>
+          </div>
+
+          <div style="margin-top:10px">
+            <div class="progress"><i id="bar"></i></div>
+            <div style="display:flex;justify-content:space-between;margin-top:6px"><span id="countLabel">Samples: 0</span><span id="message"></span></div>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel video-wrap">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="capCanvas" width="640" height="480" style="display:none"></canvas>
+        <p class="status">Video feed visible when enrollment is running.</p>
+      </div>
+    </div>
+
+    <footer>Face Recognition Attendance System · Simple dark neon UI</footer>
+  </div>
+
+  <script>
+  const nameInput = document.getElementById('name');
+  const rollInput = document.getElementById('roll');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('capCanvas');
+  const ctx = canvas.getContext('2d');
+  const bar = document.getElementById('bar');
+  const countLabel = document.getElementById('countLabel');
+  const message = document.getElementById('message');
+
+  let stream = null;
+  let running = false;
+  let frameCounter = 0;
+  let sentCount = 0;
+  let inFlight = false; // prevents overlapping /api/enroll requests
+
+  function updateControls() {
+    const ready = nameInput.value.trim() !== '' && rollInput.value.trim() !== '';
+    startBtn.disabled = !ready || running;
+    stopBtn.disabled = !running;
+  }
+
+  nameInput.addEventListener('input', updateControls);
+  rollInput.addEventListener('input', updateControls);
+
+  startBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (running) return;
+    running = true;
+    updateControls();
+    message.textContent = '';
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      video.srcObject = stream;
+    } catch (err) {
+      message.textContent = 'Camera access denied or not available.';
+      running = false; updateControls(); return;
+    }
+
+    frameCounter = 0;
+    sentCount = 0;
+    inFlight = false;
+    captureLoop();
+  });
+
+  stopBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    stopCapture('Stopped by user');
+  });
+
+  function stopCapture(note) {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+    video.srcObject = null;
+    running = false;
+    updateControls();
+    if (note) message.textContent = note;
+  }
+
+  function captureLoop() {
+    if (!running) return;
+    if (video.readyState < 2) { requestAnimationFrame(captureLoop); return; }
+
+    canvas.width = 640; canvas.height = 480;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    frameCounter++;
+    // sample every 10 frames, but only if no enroll request is already pending
+    if (frameCounter % 10 === 0 && running && !inFlight) {
+      inFlight = true;
+      canvas.toBlob(async (blob) => {
+        if (!blob || !running) { inFlight = false; return; }
+
+        const fd = new FormData();
+        fd.append('name', nameInput.value.trim());
+        fd.append('rollno', rollInput.value.trim());
+        fd.append('frame', blob, 'frame.jpg');
+
+        try {
+          const res = await fetch('/enroll/api/enroll', { method: 'POST', body: fd });
+          const data = await res.json();
+
+          // Stop may have been clicked while this request was in flight
+          if (!running) { inFlight = false; return; }
+
+          if (data.error) { message.textContent = data.error; }
+
+          if (data.exists) {
+            const msg = data.message || 'Student already exists';
+            message.textContent = msg;
+            try {
+              if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg));
+              }
+            } catch (e) {}
+            stopCapture(msg);
+            return;
+          }
+
+          if (typeof data.count !== 'undefined') {
+            sentCount = data.count;
+            countLabel.textContent = 'Samples: ' + sentCount;
+            const pct = Math.min(100, Math.round((sentCount / 100) * 100));
+            bar.style.width = pct + '%';
+          }
+
+          if (data.done) {
+            speakConfirm();
+            stopCapture('Data taken, student enrolled');
+            message.textContent = 'Enrollment complete.';
+          }
+        } catch (err) {
+          console.error(err);
+          if (running) message.textContent = 'Upload failed';
+        } finally {
+          inFlight = false;
+        }
+      }, 'image/jpeg', 0.8);
+    }
+
+    if (running) requestAnimationFrame(captureLoop);
+  }
+
+  function speakConfirm() {
+    try {
+      if ('speechSynthesis' in window) {
+        const utter = new SpeechSynthesisUtterance('Data taken, student enrolled');
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utter);
+      }
+    } catch (e) { console.warn('Speech failed', e); }
+  }
+
+  updateControls();
+</script>
+</body>
+</html>

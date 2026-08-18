@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Take Attendance - Face Attendance</title>
+  <style>
+    :root{--bg:#0b0f12;--panel:#081018;--neon:#00f6ff;--accent:#9b59b6;--muted:#9aa4ab;--glass: rgba(255,255,255,0.03);font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial}
+    html,body{height:100%;margin:0;background:radial-gradient(circle at 10% 10%, #071018 0%, var(--bg) 40%);color:#e6eef3}
+    .container{max-width:980px;margin:36px auto;padding:28px;border-radius:12px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));box-shadow:0 6px 30px rgba(0,0,0,0.6),0 0 40px var(--neon) inset;border:1px solid rgba(255,255,255,0.04)}
+    .header{display:flex;flex-direction:column;align-items:center;gap:16px}
+    .logo{height:120px; /* keep rectangular image height, allow width to adapt */ border-radius:8px;background:linear-gradient(135deg,#071824,#0b1730);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--neon);box-shadow:0 0 24px rgba(0,246,255,0.12)}
+    .nav{display:flex;gap:12px}
+    .nav a{padding:10px 16px;border-radius:8px;background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--neon);text-decoration:none}
+    .main{display:flex;gap:18px;margin-top:18px}
+    .panel{background:var(--panel);padding:18px;border-radius:10px;box-shadow:0 6px 40px rgba(0,0,0,0.6),0 0 24px rgba(155,89,182,0.04) inset;border:1px solid rgba(255,255,255,0.03)}
+     #video{width:640px;height:480px;border-radius:8px;background:#000;box-shadow:0 0 30px rgba(0,0,0,0.6),0 0 28px rgba(0,246,255,0.06) inset}
+    .controls{display:flex;flex-direction:column;gap:10px}
+    button{padding:10px 14px;border-radius:8px;background:linear-gradient(90deg,var(--neon),var(--accent));color:#011;border:none;cursor:pointer}
+    .list{max-height:360px;overflow:auto;margin-top:8px;border-radius:8px;padding:8px;background:rgba(255,255,255,0.02)}
+    .item{padding:8px;border-bottom:1px dashed rgba(255,255,255,0.03)}
+    footer{margin-top:18px;text-align:center;color:var(--muted);font-size:13px}
+    @media(max-width:980px){ #video{width:100%;height:320px}.main{flex-direction:column} }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo"><img src="/static/logo.jpg" alt="College Logo" style="height:120px;width:auto;object-fit:contain;border-radius:6px;"/></div>
+      <div class="nav">
+        <a href="/enroll">Enroll Student</a>
+        <a href="/attendance">Take Attendance</a>
+        <a href="/download">Download Attendance</a>
+        <a href="/students">Manage Students</a>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="panel">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="cap" width="640" height="480" style="display:none"></canvas>
+      </div>
+
+      <div class="panel controls">
+        <div>
+          <button id="start">Start</button>
+          <button id="stop" disabled>Stop</button>
+        </div>
+        <div style="font-size:14px;color:var(--muted);margin-top:6px">Recognitions</div>
+        <div class="list" id="results"></div>
+      </div>
+    </div>
+
+    <footer>Face Recognition Attendance System · Simple dark neon UI</footer>
+  </div>
+
+  <script>
+  const start = document.getElementById('start');
+  const stop = document.getElementById('stop');
+  const video = document.getElementById('video');
+  const cap = document.getElementById('cap');
+  const ctx = cap.getContext('2d');
+  const results = document.getElementById('results');
+
+  let stream = null;
+  let running = false;
+  let frameCount = 0;
+  let inFlight = false;          // prevents overlapping requests
+  let lastUnknownAt = 0;         // throttle "unknown" spam
+  const UNKNOWN_COOLDOWN_MS = 8000; // only log/speak "unknown" once per 8s
+
+  start.addEventListener('click', async () => {
+    if (running) return;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      video.srcObject = stream;
+      running = true;
+      start.disabled = true;
+      stop.disabled = false;
+      frameCount = 0;
+      captureLoop();
+    } catch (err) {
+      alert('Camera unavailable');
+    }
+  });
+
+  stop.addEventListener('click', () => {
+    if (!running) return;
+    running = false;
+    start.disabled = false;
+    stop.disabled = true;
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+    }
+  });
+
+  function appendResult(text) {
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.textContent = text;
+    results.prepend(el);
+  }
+
+  function captureLoop() {
+    if (!running) return;
+    if (video.readyState < 2) { requestAnimationFrame(captureLoop); return; }
+    cap.width = 640; cap.height = 480;
+    ctx.drawImage(video, 0, 0, cap.width, cap.height);
+
+    frameCount++;
+    // send a frame every 15 frames, and only if no request is already in flight
+    if (frameCount % 15 === 0 && running && !inFlight) {
+      inFlight = true;
+      cap.toBlob(async (blob) => {
+        // running may have changed while toBlob was encoding — recheck
+        if (!blob || !running) { inFlight = false; return; }
+
+        const fd = new FormData();
+        fd.append('frame', blob, 'frame.jpg');
+
+        try {
+          const res = await fetch('/attendance/api/recognize', { method: 'POST', body: fd });
+          const data = await res.json();
+
+          // if Stop was clicked while the request was in flight, drop the result
+          if (!running) { inFlight = false; return; }
+
+          if (data && data.matches && data.matches.length) {
+            data.matches.forEach(m => {
+              const isUnknown = !m.rollno || m.rollno === 'unknown';
+
+              if (isUnknown) {
+                const now = Date.now();
+                if (now - lastUnknownAt < UNKNOWN_COOLDOWN_MS) return; // throttle spam
+                lastUnknownAt = now;
+                appendResult('Unknown - ' + new Date().toLocaleTimeString());
+                return;
+              }
+
+              if (m.already) return; // already marked present today, skip
+
+              const t = (m.name ? m.name : 'Unknown') + ' (' + m.rollno + ')';
+              appendResult(t + ' - ' + new Date().toLocaleTimeString());
+              try {
+                if ('speechSynthesis' in window) {
+                  const u = new SpeechSynthesisUtterance((m.name || m.rollno) + ' present');
+                  window.speechSynthesis.speak(u);
+                }
+              } catch (e) {}
+            });
+          }
+        } catch (err) {
+          console.error(err);
+        } finally {
+          inFlight = false;
+        }
+      }, 'image/jpeg', 0.8);
+    }
+
+    if (running) requestAnimationFrame(captureLoop);
+  }
+</script>
+</body>
+</html>
