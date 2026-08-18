@@ -32,35 +32,33 @@ async def api_recognize(frame: UploadFile = File(...)):
     except Exception as exc:
         return JSONResponse({'error': f'Could not process image: {exc}'}, status_code=400)
 
-    students = get_students()
-    if not students:
-        return JSONResponse({'matches': []})
-
-    known_encodings = []
-    for student in students:
-        if not student['encoding']:
-            continue
-        known_encodings.append(np.asarray(student['encoding'], dtype=np.float64))
-
-    matches = []
     if not face_encodings:
         return JSONResponse({'matches': []})
+
+    students = get_students()
+    known_students = [
+        s for s in students
+        if s.get('encoding') is not None and len(s['encoding']) > 0
+    ]
+
+    if not known_students:
+        return JSONResponse({'matches': []})
+
+    matches = []
 
     for face_encoding in face_encodings:
         best_match = None
         best_distance = 1.0
 
-        for student in students:
-            if not student['encoding']:
-                continue
+        for student in known_students:
             known_encoding = np.asarray(student['encoding'], dtype=np.float64)
             is_match, distance = compare_faces(face_encoding, [known_encoding], tolerance=0.45)
             if is_match and distance < best_distance:
                 best_match = student
                 best_distance = distance
 
+        # Unknown face -> skip completely, kuch bhi return/log nahi hoga
         if best_match is None:
-            matches.append({'rollno': 'unknown', 'name': 'Unknown', 'class': 'Unknown', 'already': False})
             continue
 
         inserted = log_attendance(best_match['rollno'], best_match['name'], best_match.get('class_name'))
