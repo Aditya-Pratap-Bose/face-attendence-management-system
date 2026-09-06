@@ -16,11 +16,11 @@ app.include_router(attendance_router, prefix='/attendance')
 app.include_router(download_router, prefix='/download')
 app.include_router(students_router, prefix='/students')
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-app.mount('/static', StaticFiles(directory=DATA_DIR), name='static')
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, 'static')
+app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), 'src'))
-TEMPLATES_DIR = os.path.join(BASE_DIR, 'templates')
+TEMPLATES_DIR = os.path.join(BASE_DIR, 'src', 'templates')
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 
